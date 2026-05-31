@@ -43,7 +43,7 @@ func (t *Timer) Start() error {
 
 	if t.left <= 0 {
 		t.left = t.duration
-		return nil
+
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
@@ -80,7 +80,12 @@ func (t *Timer) Stop() error {
 
 	t.status = Stopped
 	t.left = t.duration
-	t.cancel()
+
+	if t.cancel != nil {
+		t.cancel()
+		t.cancel = nil
+	}
+
 	return nil
 }
 
@@ -89,6 +94,7 @@ func (t *Timer) Reset() {
 	defer t.mu.Unlock()
 
 	if t.status == Running || t.status == Paused {
+		t.cancel()
 		t.status = Stopped
 	}
 	t.left = t.duration
@@ -106,9 +112,8 @@ func (t *Timer) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			t.mu.Lock()
-			currentLeft := t.left
 			t.left--
-
+			currentLeft := t.left
 			t.mu.Unlock()
 
 			fmt.Println("Осталось:", currentLeft)
