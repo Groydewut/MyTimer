@@ -106,8 +106,9 @@ func (t *Timer) run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			t.mu.Lock()
-			t.left--
 			currentLeft := t.left
+			t.left--
+
 			t.mu.Unlock()
 
 			fmt.Println("Осталось:", currentLeft)
@@ -123,6 +124,18 @@ func (t *Timer) run(ctx context.Context) {
 
 		}
 	}
+}
+
+func (t *Timer) GetStatus() Status {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.status
+}
+
+func (t *Timer) GetLeft() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.left
 }
 
 func main() {
