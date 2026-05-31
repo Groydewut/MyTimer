@@ -13,7 +13,6 @@ type Status int
 const (
 	Stopped Status = iota
 	Running
-	Paused
 	Finished
 )
 
@@ -31,20 +30,19 @@ func NewTimer(second int) *Timer {
 		duration: second,
 		left:     second,
 		status:   Stopped,
-		tickCh:   make(chan int, 10),
+		tickCh:   make(chan int, 100),
 	}
 }
 
 func (t *Timer) Start() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.tickCh = make(chan int, 10)
 
 	if t.status == Running {
 		return errors.New("Ошибка.Таймер уже работает.")
 	}
 
-	if t.left <= 0 {
+	if t.status == Finished || t.left <= 0 {
 		t.left = t.duration
 
 	}
@@ -60,13 +58,11 @@ func (t *Timer) Stop() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.status == Stopped || t.status == Finished {
-		return errors.New("Ошибка, таймер уже остановлен или завершён.")
+	if t.status != Running {
+		return errors.New("Нельзя остановить, таймер не запуще!")
 	}
 
 	t.status = Stopped
-	t.left = t.duration
-
 	if t.cancel != nil {
 		t.cancel()
 		t.cancel = nil
@@ -83,16 +79,14 @@ func (t *Timer) Reset() {
 		t.cancel()
 		t.cancel = nil
 	}
-
-	t.left = t.duration
 	t.status = Stopped
+	t.left = t.duration
 
 }
 
 func (t *Timer) run(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-	defer close(t.tickCh)
 
 	for {
 		select {
@@ -102,19 +96,49 @@ func (t *Timer) run(ctx context.Context) {
 			t.mu.Lock()
 			t.left--
 
-			t.mu.Unlock()
-
-			t.tickCh <- t.left
-
 			if t.left <= 0 {
-				t.mu.Lock()
+				t.left = 0
 				t.status = Finished
 				t.mu.Unlock()
+
+				select {
+				case t.tickCh <- 0:
+				default:
+				}
 				return
 			}
 
+			currentLeft := t.left
+			t.mu.Unlock()
+
+			select {
+			case t.tickCh <- currentLeft:
+			default:
+			}
 		}
 	}
+}
+
+func (t *Timer) Resume() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.status != Stopped {
+		return errors.New("нельзя продолжить таймер не на паузе")
+
+	}
+
+	if t.left <= 0 {
+		return errors.New("Таймер уже завершился")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.cancel = cancel
+	t.status = Running
+
+	go t.run(ctx)
+	return nil
+
 }
 
 func (t *Timer) GetStatus() Status {
@@ -129,24 +153,47 @@ func (t *Timer) GetLeft() int {
 	return t.left
 }
 
+func (t *Timer) GetTickChannel() <-chan int {
+	return t.tickCh
+}
+
+func (t *Timer) GetDuration() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.duration
+}
+
 func main() {
 	fmt.Println("Timer backend initialized")
-	timer := NewTimer(5)
-
-	fmt.Println("не заблокированно")
-
-	if err := timer.Start(); err != nil {
-		fmt.Println("Error:", err)
-	} else {
-		fmt.Println("Start success!")
-	}
-
+	t := NewTimer(15)
 	go func() {
-		for left := range timer.tickCh {
-			fmt.Println(left)
+		for left := range t.GetTickChannel() {
+			fmt.Printf("⏱️  Осталось: %d сек | Статус: %v\n", left, t.GetStatus())
+			if left == 0 {
+				fmt.Println("🔔 Таймер завершил работу!")
+			}
 		}
+
 	}()
 
-	time.Sleep(10 * time.Second)
+	if err := t.Start(); err != nil {
+		fmt.Println("Ошибка:", err)
+		return
+	}
+	fmt.Println("Работаю...")
 
+	if err := t.Stop(); err != nil {
+		fmt.Println("Ошибка:", err)
+		return
+	}
+	fmt.Println("Пауза")
+	time.Sleep(3 * time.Second)
+
+	if err := t.Resume(); err != nil {
+		fmt.Println("Ошибка:", err)
+	}
+	fmt.Println("Продолжаем")
+
+	time.Sleep(20 * time.Second)
+	fmt.Println("\n✅ Демонстрация завершена. Backend готов к подключению Wails.")
 }
