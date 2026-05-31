@@ -23,6 +23,7 @@ type Timer struct {
 	left     int
 	status   Status
 	cancel   context.CancelFunc
+	tickCh   chan int
 }
 
 func NewTimer(second int) *Timer {
@@ -30,12 +31,14 @@ func NewTimer(second int) *Timer {
 		duration: second,
 		left:     second,
 		status:   Stopped,
+		tickCh:   make(chan int, 10),
 	}
 }
 
 func (t *Timer) Start() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.tickCh = make(chan int, 10)
 
 	if t.status == Running {
 		return errors.New("Ошибка.Таймер уже работает.")
@@ -51,23 +54,6 @@ func (t *Timer) Start() error {
 
 	go t.run(ctx)
 	return nil
-}
-
-func (t *Timer) Pause() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if t.status == Paused || t.status == Stopped {
-		return errors.New("Таймер уже остановлен.Ошибка.")
-	}
-
-	if t.cancel != nil {
-		t.cancel()
-	}
-
-	t.status = Paused
-	return nil
-
 }
 
 func (t *Timer) Stop() error {
@@ -93,10 +79,11 @@ func (t *Timer) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.status == Running || t.status == Paused {
+	if t.cancel != nil {
 		t.cancel()
-		t.status = Stopped
+		t.cancel = nil
 	}
+
 	t.left = t.duration
 	t.status = Stopped
 
@@ -105,6 +92,7 @@ func (t *Timer) Reset() {
 func (t *Timer) run(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+	defer close(t.tickCh)
 
 	for {
 		select {
@@ -113,17 +101,15 @@ func (t *Timer) run(ctx context.Context) {
 		case <-ticker.C:
 			t.mu.Lock()
 			t.left--
-			currentLeft := t.left
+
 			t.mu.Unlock()
 
-			fmt.Println("Осталось:", currentLeft)
+			t.tickCh <- t.left
 
-			if currentLeft <= 0 {
+			if t.left <= 0 {
 				t.mu.Lock()
 				t.status = Finished
 				t.mu.Unlock()
-
-				fmt.Println("Время вышло.")
 				return
 			}
 
@@ -154,6 +140,12 @@ func main() {
 	} else {
 		fmt.Println("Start success!")
 	}
+
+	go func() {
+		for left := range timer.tickCh {
+			fmt.Println(left)
+		}
+	}()
 
 	time.Sleep(10 * time.Second)
 
